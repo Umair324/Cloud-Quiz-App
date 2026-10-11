@@ -3,11 +3,11 @@ import JSZip from "jszip"; // npm install jszip
 
 /*
   Cloud Computing Exam Prep (React)
-  Usage: put this file in src/, then in main.jsx:  import App from "./CloudExamPrep"
-  Upload tab: Claude mode needs your own Anthropic API key (npm i jszip); Offline mode needs nothing.
+  Question types: MCQ, True/False, Fill in the blanks (mixed in one quiz).
+  Upload tab: Claude mode needs your own Anthropic API key; Offline mode needs nothing.
 */
 
-// Data: MCQ "lec|question|A|B|C|D|correctIndex"; QA "lec|question|answer"
+// MCQ "lec|question|A|B|C|D|correctIndex"; TF "lec|statement|T or F"; FIB "lec|sentence with ____|answer (/ for alternatives)"; QA "lec|question|answer"
 export const MC=[
 "L1|Cloud refers to:|A local hard drive|A network or the internet|A printer|A CPU|1",
 "L1|Which is NOT a NIST essential characteristic?|On-demand self-service|Resource pooling|Manual provisioning|Measured service|2",
@@ -83,6 +83,40 @@ export const MC=[
 "L7|The apartment-building analogy refers to:|Multi-tenancy|Virtualization|PBX|SLA|0"
 ];
 
+export const TF=[
+"L1|Cloud computing requires the provider to manually set up every request.|F",
+"L1|Grid computing is loosely coupled and can span the Internet.|T",
+"L2|AWS EC2 was launched in 2006.|T",
+"L2|Salesforce delivered the first business app through a website in 1999.|T",
+"L3|In SaaS the customer manages the infrastructure.|F",
+"L3|Multi-tenancy means a single software instance serves many customers.|T",
+"L4|PaaS is mainly used by end users rather than developers.|F",
+"L4|Adding more application instances is called horizontal scaling.|T",
+"L5|In IaaS the provider manages the customer's OS and applications.|F",
+"L5|IaaS gives the most flexibility among the three service models.|T",
+"L6|Jitter is the variation in packet delay.|T",
+"L6|CaaS stands for Cloud as a Service.|F",
+"L7|A private cloud is dedicated to one organization.|T",
+"L7|Public cloud has the lowest scalability of all deployment models.|F"
+];
+
+export const FIB=[
+"L1|The NIST definition lists ____ essential characteristics.|five/5",
+"L1|One physical server acting as many virtual servers is called ____.|virtualization",
+"L2|Time-sharing is called the grandfather of ____ computing.|cloud",
+"L2|AWS originated from Amazon's ____ server capacity.|spare",
+"L3|SaaS software is usually paid for by ____.|subscription",
+"L3|Gmail and Salesforce are examples of ____.|SaaS",
+"L4|PaaS is mainly used by ____.|developers",
+"L4|Boosting the CPU or RAM of an existing instance is ____ scaling.|vertical",
+"L5|EC2 stands for Elastic ____ Cloud.|compute",
+"L5|In IaaS the ____ manages the physical servers.|provider",
+"L6|PBX stands for Private Branch ____.|exchange",
+"L6|The delay between sender and receiver is called ____.|latency",
+"L7|Combining private and public cloud gives a ____ cloud.|hybrid",
+"L7|Cloud ____ takes extra capacity from the public cloud at peak times.|bursting"
+];
+
 export const QA=[
 "L1|What is cloud? Why do we use it?|Cloud means a network or the internet: remote servers store, manage and access data instead of local drives. Used because own IT infrastructure (server room, engineers, networking) is costly; cloud reduces cost and gives pay-per-use, scalability and access from anywhere.",
 "L1|Define cloud computing (NIST).|A model for on-demand network access to a shared pool of configurable computing resources (networks, servers, storage, applications, services) that can be rapidly provisioned and released with minimal management effort.",
@@ -123,13 +157,20 @@ const LN = {
   L7: "Lecture 7 - Deployment Models",
 };
 
-const parseMC = (s) => { const p = s.split("|"); return { l: p[0], q: p[1], o: p.slice(2, 6), a: +p[6] }; };
+const TYPE_LABEL = { mcq: "MCQ", tf: "True / False", fib: "Fill in the blank" };
+const TF_OPTIONS = ["True", "False"];
+
+// Every question: { t: "mcq"|"tf"|"fib", l, q, o?, a }
+const parseMC = (s) => { const p = s.split("|"); return { t: "mcq", l: p[0], q: p[1], o: p.slice(2, 6), a: +p[6] }; };
+const parseTF = (s) => { const p = s.split("|"); return { t: "tf", l: p[0], q: p[1], o: TF_OPTIONS, a: p[2] === "T" ? 0 : 1 }; };
+const parseFIB = (s) => { const p = s.split("|"); return { t: "fib", l: p[0], q: p[1], a: p[2] }; };
 const parseQA = (s) => { const p = s.split("|"); return { l: p[0], q: p[1], a: p.slice(2).join("|") }; };
 const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+const fibCorrect = (typed, answer) => answer.split("/").some((x) => norm(x) === norm(typed));
 
 const MODEL = "claude-sonnet-5-5";
 
-// Returns an array of slides; each slide is an array of text lines (one per paragraph).
 async function extractSlides(file) {
   const z = await JSZip.loadAsync(file);
   const num = (n) => parseInt(n.match(/\d+/)[0], 10);
@@ -149,13 +190,16 @@ async function extractSlides(file) {
 const slidesToText = (slides) => slides.map((l, i) => `Slide ${i + 1}: ${l.join(" | ")}`).join("\n");
 const short = (t, n) => (t.length > n ? t.slice(0, n - 1).trimEnd() + "..." : t);
 
-// Mode 1: Claude API. The key is typed by the user and kept only in memory. Personal use only:
-// a key placed in browser code can be read by anyone using the page.
+// Mode 1: Claude API (personal use only: a key in browser code can be read by anyone using the page).
 async function generateWithClaude(text, key) {
   const prompt =
     "You are creating exam prep from lecture slides. Slide text:\n" + text.slice(0, 14000) +
-    '\n\nReturn ONLY valid JSON: {"mcqs":[{"q":string,"o":[4 short strings],"a":index 0-3}],"qa":[{"q":string,"a":string}]}. ' +
-    "Write as many good MCQs as the content supports (up to 40) with plausible wrong options, and up to 15 short conceptual answers (2-4 lines). Use only facts from the slides.";
+    '\n\nReturn ONLY valid JSON in exactly this shape: {"mcqs":[{"q":string,"o":[4 short strings],"a":index 0-3}],' +
+    '"tf":[{"q":string,"a":true or false}],"fib":[{"q":string containing one ____ blank,"a":string}],"qa":[{"q":string,"a":string}]}. ' +
+    "Write a MIX of question types: about 20 MCQs with plausible wrong options, about 12 true/false statements (roughly half false, " +
+    "make false ones by changing one key fact), about 12 fill-in-the-blank sentences (the blank must be ONE key term or number, " +
+    "answer is 1-3 words; if two spellings are acceptable separate them with /), and up to 10 short conceptual answers (2-4 lines). " +
+    "Use only facts from the slides.";
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -172,7 +216,7 @@ async function generateWithClaude(text, key) {
   return JSON.parse(out);
 }
 
-// Mode 2: offline, no key. Finds "Term: definition" and "Term is ..." lines and builds simple questions.
+// Mode 2: offline, no key. Builds MCQ, True/False and Fill-in-the-blank from "Term: definition" lines.
 function generateOffline(slides) {
   const pairs = [];
   const seen = new Set();
@@ -189,7 +233,8 @@ function generateOffline(slides) {
     }
   }
   const qa = pairs.slice(0, 40).map((p) => ({ q: `Explain: ${p.t}`, a: short(p.d, 400) }));
-  const mcqs = [];
+  const mcqs = [], tf = [], fib = [];
+  pairs.forEach((p) => { fib.push({ q: `____ : ${short(p.d, 160)}`, a: p.t }); });
   if (pairs.length >= 4) {
     pairs.forEach((p, i) => {
       const others = shuffle(pairs.filter((_, j) => j !== i));
@@ -198,20 +243,22 @@ function generateOffline(slides) {
       const right = short(p.d, 90);
       const o2 = shuffle([right, ...others.slice(0, 3).map((x) => short(x.d, 90))]);
       mcqs.push({ q: `Which statement best describes "${p.t}"?`, o: o2, a: o2.indexOf(right) });
+      if (i % 2 === 0) tf.push({ q: `${p.t}: ${short(p.d, 140)}`, a: true });
+      else tf.push({ q: `${p.t}: ${short(others[0].d, 140)}`, a: false });
     });
   }
-  return { mcqs, qa };
+  return { mcqs, tf, fib, qa };
 }
 
-function Home({ go, nQA, nMC }) {
+function Home({ go, nQA, nQ }) {
   return (
     <>
       <h1>Cloud Computing Exam Prep</h1>
       <p className="mu">Practice for your midterm, built from your lecture slides.</p>
       <div className="grid">
         <button className="card big" onClick={() => go("written")}>Written<small>Conceptual answers ({nQA})</small></button>
-        <button className="card big" onClick={() => go("setup")}>MCQ Practice<small>{nMC} questions with instant feedback and score</small></button>
-        <button className="card big" onClick={() => go("upload")}>Upload slides<small>Generate new MCQs and answers from a .pptx</small></button>
+        <button className="card big" onClick={() => go("setup")}>Quiz Practice<small>{nQ} questions: MCQ, True/False, Fill in the blanks</small></button>
+        <button className="card big" onClick={() => go("upload")}>Upload slides<small>Generate a mixed quiz from a .pptx</small></button>
       </div>
     </>
   );
@@ -242,16 +289,23 @@ function Written({ qa, keys, lab }) {
 
 function Setup({ keys, onStart, lab }) {
   const [f, setF] = useState("*");
+  const [type, setType] = useState("*");
   return (
     <>
-      <h1>MCQ Practice</h1>
-      <p className="mu">Pick a lecture, then tap an option. Green = correct, red = wrong.</p>
+      <h1>Quiz Practice</h1>
+      <p className="mu">Pick a lecture and a question type. Green = correct, red = wrong.</p>
       <div className="row">
         <select value={f} onChange={(e) => setF(e.target.value)}>
           <option value="*">All lectures</option>
           {keys.map((k) => <option key={k} value={k}>{lab(k)}</option>)}
         </select>
-        <button className="btn" onClick={() => onStart(f)}>Start</button>
+        <select value={type} onChange={(e) => setType(e.target.value)}>
+          <option value="*">Mixed (all types)</option>
+          <option value="mcq">MCQ only</option>
+          <option value="tf">True / False only</option>
+          <option value="fib">Fill in the blanks only</option>
+        </select>
+        <button className="btn" onClick={() => onStart(f, type)}>Start</button>
       </div>
     </>
   );
@@ -263,6 +317,8 @@ function Quiz({ pool, onRetry, onChange }) {
   const [score, setScore] = useState(0);
   const [wrong, setWrong] = useState([]);
   const [picked, setPicked] = useState(null);
+  const [typed, setTyped] = useState("");
+  const [fibOk, setFibOk] = useState(null);
   const [done, setDone] = useState(false);
   const n = qs.length;
 
@@ -283,28 +339,60 @@ function Quiz({ pool, onRetry, onChange }) {
   }
 
   const q = qs[i];
-  const answered = picked !== null;
-  const choose = (k) => {
-    if (answered) return;
-    setPicked(k);
-    if (k === q.a) setScore((s) => s + 1); else setWrong((w) => [...w, q]);
+  const isFib = q.t === "fib";
+  const answered = isFib ? fibOk !== null : picked !== null;
+  const correct = isFib ? fibOk === true : picked === q.a;
+
+  const record = (ok) => { if (ok) setScore((s) => s + 1); else setWrong((w) => [...w, q]); };
+  const choose = (k) => { if (answered) return; setPicked(k); record(k === q.a); };
+  const check = () => {
+    if (answered || !typed.trim()) return;
+    const ok = fibCorrect(typed, q.a);
+    setFibOk(ok); record(ok);
   };
-  const next = () => { if (i === n - 1) setDone(true); else { setI(i + 1); setPicked(null); } };
+  const next = () => {
+    if (i === n - 1) setDone(true);
+    else { setI(i + 1); setPicked(null); setTyped(""); setFibOk(null); }
+  };
 
   return (
     <>
       <div className="top"><span>Question {i + 1} / {n}</span><span>Score: {score}</span></div>
       <div className="bar"><i style={{ width: `${(i / n) * 100}%` }} /></div>
+      <span className="tag">{TYPE_LABEL[q.t] || "MCQ"}</span>
       <h2>{q.q}</h2>
-      {q.o.map((o, k) => {
+
+      {!isFib && q.o.map((o, k) => {
         let cls = "opt";
         if (answered && k === q.a) cls += " ok";
         else if (answered && k === picked) cls += " no";
         return <button key={k} className={cls} disabled={answered} onClick={() => choose(k)}>{o}</button>;
       })}
+
+      {isFib && (
+        <div className="row">
+          <input
+            className={"fib" + (answered ? (fibOk ? " ok" : " no") : "")}
+            type="text"
+            placeholder="Type your answer"
+            value={typed}
+            disabled={answered}
+            autoFocus
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") check(); }}
+          />
+          {!answered && <button className="btn" onClick={check}>Check</button>}
+        </div>
+      )}
+
       {answered && (
         <div>
-          <p><b style={{ color: `var(--${picked === q.a ? "ok" : "no"})` }}>{picked === q.a ? "Correct!" : "Wrong - the correct answer is shown in green."}</b></p>
+          <p>
+            <b style={{ color: `var(--${correct ? "ok" : "no"})` }}>
+              {correct ? "Correct!" : isFib ? "Wrong." : "Wrong - the correct answer is shown in green."}
+            </b>
+            {isFib && !correct && <> Correct answer: <b>{q.a.split("/")[0]}</b></>}
+          </p>
           <button className="btn" onClick={next}>{i === n - 1 ? "See result" : "Next"}</button>
         </div>
       )}
@@ -330,12 +418,19 @@ function Upload({ onAdd }) {
       let r;
       if (mode === "claude") { setStatus("Asking Claude to write questions (30-60 seconds)..."); r = await generateWithClaude(slidesToText(slides), key.trim()); }
       else r = generateOffline(slides);
+
       const mcqs = (r.mcqs || []).filter((x) => x && x.q && Array.isArray(x.o) && x.o.length === 4 && x.a >= 0 && x.a < 4)
-        .map((x) => ({ l: "U", q: String(x.q), o: x.o.map(String), a: +x.a }));
-      const qas = (r.qa || []).filter((x) => x && x.q && x.a).map((x) => ({ l: "U", q: String(x.q), a: String(x.a) }));
-      if (!mcqs.length && !qas.length) throw new Error("No questions could be made from this file. Try Claude mode.");
-      onAdd(mcqs, qas, file.name);
-      setStatus(`Added ${mcqs.length} MCQs and ${qas.length} written answers as its own option "${file.name}". Go Home to practise it.`);
+        .map((x) => ({ t: "mcq", q: String(x.q), o: x.o.map(String), a: +x.a }));
+      const tfs = (r.tf || []).filter((x) => x && x.q && (x.a === true || x.a === false || x.a === "true" || x.a === "false"))
+        .map((x) => ({ t: "tf", q: String(x.q), o: TF_OPTIONS, a: (x.a === true || x.a === "true") ? 0 : 1 }));
+      const fibs = (r.fib || []).filter((x) => x && x.q && x.a && String(x.q).includes("__"))
+        .map((x) => ({ t: "fib", q: String(x.q), a: String(x.a) }));
+      const qas = (r.qa || []).filter((x) => x && x.q && x.a).map((x) => ({ q: String(x.q), a: String(x.a) }));
+
+      const items = [...mcqs, ...tfs, ...fibs];
+      if (!items.length && !qas.length) throw new Error("No questions could be made from this file. Try Claude mode.");
+      onAdd(items, qas, file.name);
+      setStatus(`Added ${mcqs.length} MCQs, ${tfs.length} True/False, ${fibs.length} Fill-in-the-blank and ${qas.length} written answers as its own option "${file.name}". Go Home to practise it.`);
     } catch (e) {
       setStatus("Could not generate: " + (e.message || "unknown error"));
     }
@@ -345,7 +440,7 @@ function Upload({ onAdd }) {
   return (
     <>
       <h1>Upload slides</h1>
-      <p className="mu">Choose a .pptx file. Text is read in your browser.</p>
+      <p className="mu">Choose a .pptx file. Text is read in your browser. You get a mix of MCQs, True/False and Fill in the blanks.</p>
       <div className="row">
         <select value={mode} onChange={(e) => setMode(e.target.value)}>
           <option value="claude">Claude (best quality, needs API key)</option>
@@ -368,9 +463,9 @@ function Upload({ onAdd }) {
 }
 
 export default function CloudExamPrep() {
-  const [mcq, setMcq] = useState(() => MC.map(parseMC));
+  const [qs, setQs] = useState(() => [...MC.map(parseMC), ...TF.map(parseTF), ...FIB.map(parseFIB)]);
   const [qa, setQa] = useState(() => QA.map(parseQA));
-  const [uploads, setUploads] = useState({}); // id -> file name
+  const [uploads, setUploads] = useState({});
   const [view, setView] = useState("home");
   const [pool, setPool] = useState([]);
   const [runId, setRunId] = useState(0);
@@ -378,15 +473,14 @@ export default function CloudExamPrep() {
   const lab = (k) => LN[k] || uploads[k] || k;
 
   const keys = useMemo(
-    () => [...Object.keys(LN), ...Object.keys(uploads)].filter((k) => mcq.some((x) => x.l === k) || qa.some((x) => x.l === k)),
-    [mcq, qa, uploads]
+    () => [...Object.keys(LN), ...Object.keys(uploads)].filter((k) => qs.some((x) => x.l === k) || qa.some((x) => x.l === k)),
+    [qs, qa, uploads]
   );
 
-  // Each uploaded file becomes its own set. Uploading the same file name again replaces that set.
-  const addUpload = (m, q, name) => {
+  const addUpload = (items, q, name) => {
     const id = Object.keys(uploads).find((k) => uploads[k] === name) || "U" + Date.now();
     setUploads((u) => ({ ...u, [id]: name }));
-    setMcq((a) => [...a.filter((x) => x.l !== id), ...m.map((x) => ({ ...x, l: id }))]);
+    setQs((a) => [...a.filter((x) => x.l !== id), ...items.map((x) => ({ ...x, l: id }))]);
     setQa((a) => [...a.filter((x) => x.l !== id), ...q.map((x) => ({ ...x, l: id }))]);
   };
 
@@ -399,9 +493,9 @@ export default function CloudExamPrep() {
     <div className="app">
       <style>{CSS}</style>
       {view !== "home" && <a className="back" onClick={() => setView("home")}>&larr; Home</a>}
-      {view === "home" && <Home go={setView} nQA={qa.length} nMC={mcq.length} />}
+      {view === "home" && <Home go={setView} nQA={qa.length} nQ={qs.length} />}
       {view === "written" && <Written qa={qa} keys={keys} lab={lab} />}
-      {view === "setup" && <Setup keys={keys} lab={lab} onStart={(f) => startQuiz(mcq.filter((x) => f === "*" || x.l === f))} />}
+      {view === "setup" && <Setup keys={keys} lab={lab} onStart={(f, type) => startQuiz(qs.filter((x) => (f === "*" || x.l === f) && (type === "*" || x.t === type)))} />}
       {view === "quiz" && <Quiz key={runId} pool={pool} onRetry={startQuiz} onChange={() => setView("setup")} />}
       {view === "upload" && <Upload onAdd={addUpload} />}
     </div>
@@ -416,9 +510,9 @@ html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 .app{max-width:720px;margin:0 auto;padding:18px 14px 40px}
-h1{font-size:1.5rem;margin:.2em 0}h2{font-size:1.15rem;margin:1.2em 0 .4em}
+h1{font-size:1.5rem;margin:.2em 0}h2{font-size:1.15rem;margin:.5em 0 .4em}
 .mu{color:var(--mu)}
-button,select{font:inherit;color:var(--tx)}
+button,select,input{font:inherit;color:var(--tx)}
 .grid{display:grid;gap:12px;margin-top:18px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;text-align:left;width:100%}
 .big{font-size:1.1rem;font-weight:600;cursor:pointer}
@@ -432,6 +526,11 @@ select{background:var(--card);border:1px solid var(--bd);border-radius:10px;padd
 .opt:hover:not(:disabled){border-color:var(--ac)}
 .opt.ok{background:var(--okb);border-color:var(--ok)}
 .opt.no{background:var(--nob);border-color:var(--no)}
+.fib{flex:1;min-width:200px;background:var(--card);border:2px solid var(--bd);border-radius:12px;padding:12px}
+.fib:focus{outline:none;border-color:var(--ac)}
+.fib.ok{background:var(--okb);border-color:var(--ok)}
+.fib.no{background:var(--nob);border-color:var(--no)}
+.tag{display:inline-block;margin-top:10px;font-size:.75rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ac);border:1px solid var(--bd);border-radius:999px;padding:2px 10px}
 .bar{height:8px;background:var(--bd);border-radius:6px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--ac)}
 .top{display:flex;justify-content:space-between;margin:10px 0 6px;font-weight:600}
